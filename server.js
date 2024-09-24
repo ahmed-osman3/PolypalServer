@@ -3,6 +3,7 @@ const cors = require("cors");
 const http = require("http");
 const socketIO = require("socket.io");
 const { ExpressPeerServer } = require("peer");
+const { createClient } = require("@supabase/supabase-js");
 
 const corsOptions = {
   origin: "https://app.polypal.org",
@@ -27,51 +28,74 @@ const io = socketIO(httpServer, {
 });
 app.use("/peerjs", peerServer);
 
+const connectedUsers = {}; // Storing connected users
+const peerIds = {}; // Storing peerIds if needed
+
 io.on("connection", (socket) => {
-  console.log("Client connected");
-  socket.on("join-room", (roomId, peerId, uid) => {
+  // Assuming `uid` is passed when the user connects (from Supabase)
+  const uid = socket.handshake.query.uid; // Supabase uid
+  if (uid) {
+    // Store the uid and the socket.id
+    connectedUsers[uid] = socket.id;
+
     console.log(
-      `a new user ${uid} with peerId ${peerId} has joined room ${roomId}`
+      `User ${uid} (Supabase UID) connected with socket ID: ${socket.id}`
     );
-    socket.join(roomId);
-    socket.broadcast.to(roomId).emit("user-connected", peerId, uid);
+  }
+
+  // Handle user toggling video
+  socket.on("toggle_video", (fromUid, toUid) => {
+    console.log(`User ${fromUid} (Supabase UID) has toggled video`);
+    // Get the socket id of the target user by their Supabase uid
+    let targetSocketId = connectedUsers[toUid];
+    if (targetSocketId) {
+      // Emit the message to the specific user by their socket id
+      socket.to(targetSocketId).emit("toggle_video", fromUid);
+    } else {
+      console.log(`User ${toUid} (Supabase UID) is not connected.`);
+    }
   });
 
-  socket.on("user-toggle-video", (userId, roomId) => {
-    console.log(`a new user ${userId} has toggled video in room ${roomId}`);
-
-    socket.join("roomId");
-    socket.broadcast.to(roomId).emit("user-toggle-video", userId);
+  // Handle user toggling audio
+  socket.on("toggle_audio", (fromUid, toUid) => {
+    console.log(`User ${fromUid} (Supabase UID) has toggled audio`);
+    // Get the socket id of the target user by their Supabase uid
+    let targetSocketId = connectedUsers[toUid];
+    if (targetSocketId) {
+      // Emit the message to the specific user by their socket id
+      socket.to(targetSocketId).emit("toggle_audio", fromUid);
+    } else {
+      console.log(`User ${toUid} (Supabase UID) is not connected.`);
+    }
   });
 
-  socket.on("user-toggle-audio", (userId, roomId) => {
-    console.log(`a new user ${userId} has toggled audio in room ${roomId}`);
-
-    socket.join("roomId");
-    socket.broadcast.to(roomId).emit("user-toggle-audio", userId);
-  });
-
-  socket.on("user-leave", (userId, roomId) => {
-    console.log(`a new user ${userId} has left room ${roomId}`);
-    socket.join("roomId");
-    socket.broadcast.to(roomId).emit("user-leave", userId);
-  });
-
-  socket.on("send_msg", (userId, roomId, message) => {
+  // Handle sending messages between users based on Supabase uid
+  socket.on("send_msg", (fromUid, toUid, message) => {
     console.log(
-      `a new user has sent to ${userId} has sent a message to  ${roomId} saying ${message.message}`
+      `User ${fromUid} (Supabase UID) sent a message to user ${toUid}: ${message}`
     );
-    socket.join("roomId");
-    socket.broadcast.to(roomId).emit("send_msg", message);
+
+    // Get the socket id of the target user by their Supabase uid
+    let targetSocketId = connectedUsers[toUid];
+
+    if (targetSocketId) {
+      // Emit the message to the specific user by their socket id
+      socket.to(targetSocketId).emit("receive_msg", {
+        from: fromUid,
+        message: message,
+      });
+    } else {
+      console.log(`User ${toUid} (Supabase UID) is not connected.`);
+    }
   });
 
-  socket.on("room_join", (userId, roomId) => {
-    console.log(
-      `User ${userId} has indicated user has joined successfully and is passing back his info`
-    );
-    socket.join("roomId");
-
-    socket.broadcast.to(roomId).emit("room_join", userId);
+  // Handle user disconnect
+  socket.on("disconnect", () => {
+    if (uid) {
+      console.log(`User ${uid} disconnected.`);
+      delete connectedUsers[uid]; // Remove the user from the connected list
+      delete peerIds[uid]; // Optionally remove peerId if you want to clear it on disconnect
+    }
   });
 });
 
@@ -79,7 +103,7 @@ app.all("*", (req, res) => {
   return handle(req, res);
 });
 
-const PORT = process.env.PORT || 443;
+const PORT = process.env.PORT || 9000;
 httpServer.listen(PORT, () => {
   console.log(`Server is running on http://localhost:${PORT}`);
 });
